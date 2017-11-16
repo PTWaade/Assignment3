@@ -15,13 +15,411 @@ The goal of this assignment is to first familiarize you with heart rate, and res
 
 These are the questions you need to be able to answer at the end of the assignment (aka that you need to submit as part of the portfolio)
 
+
+```{r}
+library(pacman)
+library(crqa)
+library(tidyverse)
+library(dplyr)
+library(stringr)
+p_load(groupdata2)
+
+```
+
+```{r}
+############### ON ONE DATASET #########
+
+
+# READ IN DATA
+filename = "CleanData/Study2_G5_T1_Synchronous.csv"
+d1 = read.csv (filename, header = T)
+
+# EXTRACT DATA FROM NAME
+Study = str_extract(filename, "Study+\\d+") %>%   
+      str_extract("\\d+")
+Group = str_extract(filename, "G+\\d+") %>%   
+      str_extract("\\d+")
+Trial = str_extract(filename, "T+\\d+") %>%   
+      str_extract("\\d+")
+Condition = gsub(".*[_]([^.]+)[.].*", "\\1", filename)
+  
+#DOWNSAMPLE
+p_load(groupdata2)
+d1 = d1 %>%
+  group(n= 100, method= 'greedy') %>% 
+  dplyr::summarise(
+    time= mean(time,na.rm=T),
+    HR1 = mean(HR1,na.rm=T),
+    HR2 = mean(HR2,na.rm=T),
+    Resp1 = mean(Resp1,na.rm=T),
+    Resp2 = mean(Resp2,na.rm=T))
+
+#ARTIFACTS
+removeOuts <- function(ts,threshold){
+  ts[ts > (mean(ts,na.rm=T) +
+             (threshold*sd(ts,na.rm=T))) |
+       ts < (mean(ts,na.rm=T) -
+             (threshold*sd(ts,na.rm=T)))] =
+  mean(ts,na.rm=T)
+  return(ts)}
+threshold=2.5
+d1$HR1=removeOuts(d1$HR1,threshold) 
+d1$HR2=removeOuts(d1$HR2,threshold) 
+d1$Resp1=removeOuts(d1$Resp1,threshold) 
+d1$Resp2=removeOuts(d1$Resp2,threshold) 
+
+
+#SCALE
+d1$Resp1=scale(d1$Resp1)
+d1$Resp2=scale(d1$Resp2)
+d1$HR1=scale(d1$HR1)
+d1$HR2=scale(d1$HR2)
+
+
+#GET RQA RESULTS
+#Finding the optimal parameters: run on all pairs:
+par = list(lgM =  50, steps = seq(1, 6, 1),  radiusspan = 100,  radiussample = 40, normalize = 0,  rescale = 0,  mindiagline = 2,  minvertline = 2,  tw = 0,  whiteline = FALSE,  recpt = FALSE,  fnnpercent = 10,  typeami = "mindip")
+ans = optimizeParam(d1$HR1, d1$HR2, par, min.rec = 2, max.rec = 8) 
+
+Results=crqa (d1$HR1, d1$HR2, delay=10, embed=8, radius=4,normalize=0,rescale=0,mindiagline = 2,minvertline = 2)
+
+
+#Represent the plot:
+RP=Results$RP
+RP = matrix(as.numeric(RP), nrow = ncol(RP))
+cols = c("white","blue4") 
+image(RP, xlab = "", ylab = "", col = cols) 
+#Explore the lags of coordination: 
+Profile=drpdfromts(d1$HR1, d1$HR2, datatype = 'continuous',ws=50,radius=4) 
+timecourse = round( seq(-5000,5000,100)/1000, digit = 1) 
+maxlag = Profile$maxlag/1000 
+profile = Profile$profile*100 
+Prof=data.frame(profile) 
+ggplot(Prof, aes(timecourse,profile))+geom_line()+ geom_vline(xintercept = timecourse[maxlag], colour='red')
+
+
+
+```
+
+
 1) How do you preprocess heart rate and respiration data? Describe the process. If any data needs to be excluded, list the excluded data and motivate the exclusion.
+
+
+```{r}
+############  ALL DATASETS ###############
+
+
+####### PREPROCESSING #####
+#Get a list of all the filenames
+Files0 = list.files("CleanData/", ".csv")
+Files0_t = sample(Files0, 6)
+#Iteration count
+n = 1
+
+
+for (i in Files0) {
+#Put the path together with the filename
+  dest = paste("CleanData/", i, sep="")
+  #Read it
+  d_t <- read.csv(dest, header = T)
+  
+  #DOWNSAMPLE
+  d_t = d_t %>%
+    group(n= 100, method= 'greedy') %>% 
+    dplyr::summarise(
+      time= mean(time,na.rm=T),
+      HR1 = mean(HR1,na.rm=T),
+      HR2 = mean(HR2,na.rm=T),
+      Resp1 = mean(Resp1,na.rm=T),
+      Resp2 = mean(Resp2,na.rm=T))
+
+  #ARTIFACTS
+  removeOuts <- function(ts,threshold){
+    ts[ts > (mean(ts,na.rm=T) +
+               (threshold*sd(ts,na.rm=T))) |
+         ts < (mean(ts,na.rm=T) -
+               (threshold*sd(ts,na.rm=T)))] =
+    mean(ts,na.rm=T)
+    return(ts)}
+
+  threshold=2.5
+
+  d_t$HR1=removeOuts(d_t$HR1,threshold) 
+  d_t$HR2=removeOuts(d_t$HR2,threshold) 
+  d_t$Resp1=removeOuts(d_t$Resp1,threshold) 
+  d_t$Resp2=removeOuts(d_t$Resp2,threshold) 
+
+  #SCALE
+  d_t$Resp1=scale(d_t$Resp1)
+  d_t$Resp2=scale(d_t$Resp2)
+  d_t$HR1=scale(d_t$HR1)
+  d_t$HR2=scale(d_t$HR2)
+    
+  NewFilename = paste("PrepData/Prep", i, sep="")
+  write.csv(d_t, file = NewFilename )
+  
+  print (n)
+  n = n+1
+}
+
+
+
+
+```
+
+
+
+```{r}
+
+######## DETERMINING THE OPTIMAL PARAMETERS
+#Get a list of all the files
+Files = list.files("CleanData/", ".csv")
+#Get a smaller list for experimentation
+Files_t = sample(Files, 6)
+
+
+#Make lists for values
+Delay = NULL
+Embed = NULL
+Radius = NULL
+#Iteration count
+n = 1
+
+#Define input to parameter optimization
+par = list(lgM =  50, steps = seq(1, 6, 1),  radiusspan = 100,  radiussample = 40, normalize = 0,  rescale = 0,  mindiagline = 2,  minvertline = 2,  tw = 0,  whiteline = FALSE,  recpt = FALSE,  fnnpercent = 10,  typeami = "mindip")
+
+#NOTE: I use the normal, most conservative settings for parameter optimization. But I made the rec limits wider.
+
+#Optimize for each file
+for (i in Files_t){
+  
+  #Put the path together with the filename
+  dest = paste("CleanData/", i, sep="")
+  #Read it
+  d_t <- read.csv(dest, header = T)
+  
+
+  #Get optimized parameters
+  ans = try(optimizeParam(d_t$HR1, d_t$HR2, par, min.rec= 2, max.rec= 8))
+  
+  if (length(ans) < 2){
+    Delay[n] = NA
+    Embed[n] = NA
+    Radius[n] = NA
+  } else {
+    Delay[n] = ans$delay
+    Embed[n] = ans$emddim
+    Radius[n] = ans$radius}
+  
+  #loop end
+  print (n)
+  n = n+1 
+  }
+
+DELAY = median(Delay, na.rm = T)
+EMBED = median(Embed, na.rm = T)
+RADIUS = median(Radius, na.rm = T) + 1.2
+
+
+
+
+
+
+
+# LOOP ABOVE THROUGH REAL PAIRS
+
+#Create lists for results
+Study = NULL
+Group = NULL
+Trial = NULL
+Condition = NULL
+#CQRA
+HR_RR = NULL
+HR_DET = NULL
+HR_NRLINE = NULL
+HR_maxL = NULL
+HR_L = NULL
+HR_ENTR = NULL
+HR_LAM = NULL
+HR_TT = NULL
+#iteration counter
+n = 1
+
+
+
+for (i in Files_t){
+  ###Read file
+  #Put the path together with the filename
+  dest = paste("CleanData/", i, sep="")
+  #Read it
+  d_t <- read.csv(dest, header = T)
+  
+  #Extract from filename
+  Study [n] = str_extract(i, "Study+\\d+") %>%   
+        str_extract("\\d+")
+  Group [n] = str_extract(i, "G+\\d+") %>%   
+        str_extract("\\d+")
+  Trial [n] = str_extract(i, "T+\\d+") %>%   
+        str_extract("\\d+")
+  Condition [n] = gsub(".*[_]([^.]+)[.].*", "\\1", i)
+  
+  #Extract descriptive statistics
+  P_Mean[n] = mean(d_t$f0)
+  P_SD[n] = sd(d_t$f0)
+  P_Range[n] = range(d_t$f0)[2] - range(d_t$f0)[1]
+  P_Median[n] = median(d_t$f0)
+  P_IQR[n] = IQR(d_t$f0)
+  P_MeanAbDif[n] = mean(abs(d_t$f0-mean(d_t$f0)))
+  P_CovofVar[n] = sd(d_t$f0) / mean(d_t$f0)
+  
+  #Do CRQA analysis
+    crqa_t = try(crqa (d_t, d_t, delay=DELAY, embed=EMBED, radius=RADIUS, normalize=0, rescale=0, mindiagline = 2, minvertline = 2)) 
+  
+  
+  if (is.na(Delay[n]) | length(crqa_t) < 2 ){
+    P_RR[n] = NA
+    P_DET[n] = NA
+    P_NRLINE[n] = NA
+    P_maxL[n] = NA
+    P_L[n] = NA
+    P_ENTR[n] = NA
+    P_LAM[n] = NA
+    P_TT[n] = NA
+  } else {
+    P_RR[n] = crqa_t$RR
+    P_DET[n] = crqa_t$DET
+    P_NRLINE[n] = crqa_t$NRLINE
+    P_maxL[n] = crqa_t$maxL
+    P_L[n] = crqa_t$L
+    P_ENTR[n] = crqa_t$ENTR
+    P_LAM[n] = crqa_t$LAM
+    P_TT[n] = crqa_t$TT}
+  
+  #Loop end
+  print(n)
+  n = n+1}
+
+
+
+
+
+
+# READ IN DATA
+filename = "CleanData/Study2_G5_T1_Synchronous.csv"
+d1 = read.csv (filename, header = T)
+
+# EXTRACT DATA FROM NAME
+Study = str_extract(filename, "Study+\\d+") %>%   
+      str_extract("\\d+")
+Group = str_extract(filename, "G+\\d+") %>%   
+      str_extract("\\d+")
+Trial = str_extract(filename, "T+\\d+") %>%   
+      str_extract("\\d+")
+Condition = gsub(".*[_]([^.]+)[.].*", "\\1", filename)
+  
+#DOWNSAMPLE
+p_load(groupdata2)
+d1 = d1 %>%
+  group(n= 100, method= 'greedy') %>% 
+  dplyr::summarise(
+    time= mean(time,na.rm=T),
+    HR1 = mean(HR1,na.rm=T),
+    HR2 = mean(HR2,na.rm=T),
+    Resp1 = mean(Resp1,na.rm=T),
+    Resp2 = mean(Resp2,na.rm=T))
+
+#ARTIFACTS
+removeOuts <- function(ts,threshold){
+  ts[ts > (mean(ts,na.rm=T) +
+             (threshold*sd(ts,na.rm=T))) |
+       ts < (mean(ts,na.rm=T) -
+             (threshold*sd(ts,na.rm=T)))] =
+  mean(ts,na.rm=T)
+  return(ts)}
+
+threshold=2.5
+
+d1$HR1=removeOuts(d1$HR1,threshold) 
+d1$HR2=removeOuts(d1$HR2,threshold) 
+d1$Resp1=removeOuts(d1$Resp1,threshold) 
+d1$Resp2=removeOuts(d1$Resp2,threshold) 
+
+
+#SCALE
+d1$Resp1=scale(d1$Resp1)
+d1$Resp2=scale(d1$Resp2)
+d1$HR1=scale(d1$HR1)
+d1$HR2=scale(d1$HR2)
+
+
+#GET RQA RESULTS
+#Finding the optimal parameters: run on all pairs:
+par = list(lgM =  50, steps = seq(1, 6, 1),  radiusspan = 100,  radiussample = 40, normalize = 0,  rescale = 0,  mindiagline = 2,  minvertline = 2,  tw = 0,  whiteline = FALSE,  recpt = FALSE,  fnnpercent = 10,  typeami = "mindip")
+ans = optimizeParam(d1$HR1, d1$HR2, par, min.rec = 2, max.rec = 8) 
+
+Results=crqa (d1$HR1, d1$HR2, delay=10, embed=8, radius=4,normalize=0,rescale=0,mindiagline = 2,minvertline = 2)
+
+
+#Represent the plot:
+RP=Results$RP
+RP = matrix(as.numeric(RP), nrow = ncol(RP))
+cols = c("white","blue4") 
+image(RP, xlab = "", ylab = "", col = cols) 
+#Explore the lags of coordination: 
+Profile=drpdfromts(d1$HR1, d1$HR2, datatype = 'continuous',ws=50,radius=4) 
+timecourse = round( seq(-5000,5000,100)/1000, digit = 1) 
+maxlag = Profile$maxlag/1000 
+profile = Profile$profile*100 
+Prof=data.frame(profile) 
+ggplot(Prof, aes(timecourse,profile))+geom_line()+ geom_vline(xintercept = timecourse[maxlag], colour='red')
+
+
+
+#CREATE SHUFFLED PAIRS - LOOP CRQA ON THEM
+
+
+
+
+#CREATE SURROGATE PAIRS - LOOP CRQA
+
+```
+
 
 2) Do you observe interpersonal coordination in heart rate and respiration? Describe your control baseline, the method used to quantify coordination, and the statistical models used to infer whether coordination was higher than in the baseline. Report the results of the models.
 
+
+```{r}
+
+
+
+
+
+
+```
+
+
 3) Do you observe differences in coordination between conditions? Report the models and results.
 
+
+```{r}
+#####CONDITIONS
+
+
+#If do interaction, will take away the stuff from doing the same activity
+HR_RR ~ Condition*Type
+
+
+```
+
 4) Is respiration coordination a likely driver of heart rate coordination? Describe how you would test for it. Bonus points if you actually run the tests and report methods and results.
+
+
+```{r}
+
+
+
+```
+
 
 N.B. to give you a bit more data I included data from last year (Study1) and from your class (Study2). Note that synchronouns and turn-taking are the same across both studies, but the third condition is different: last year it was self-paced joint reading; this year it was the tv-series conversation. So you might want to exclude the self-paced reading (but, up to you!)
 
