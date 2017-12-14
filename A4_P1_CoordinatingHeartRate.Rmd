@@ -23,6 +23,8 @@ library(tidyverse)
 library(dplyr)
 library(stringr)
 p_load(groupdata2)
+library(lme4)
+library(lmerTest)
 
 ```
 
@@ -106,7 +108,7 @@ ggplot(Prof, aes(timecourse,profile))+geom_line()+ geom_vline(xintercept = timec
 
 
 ```{r}
-############  ALL DATASETS ###############
+############  CREATE OTHER DATASETS ###############
 
 
 ####### PREPROCESSING #####
@@ -154,34 +156,98 @@ for (i in Files0) {
   d_t$Resp2=scale(d_t$Resp2)
   d_t$HR1=scale(d_t$HR1)
   d_t$HR2=scale(d_t$HR2)
-    
+  
+  #Create new files  
   NewFilename = paste("PrepData/Prep", i, sep="")
   write.csv(d_t, file = NewFilename )
   
+  #End
   print (n)
   n = n+1
 }
 
 
 
+```
 
+```{r}
+########EYEBALL PLOTS FOR DECIDING WHICH DATASETS TO EXCLUDE
+
+#Get a list of all the files
+Filescheck = list.files("PrepData", ".csv", full.names = T)
+
+b = 5
+#Plot files (one at a time) - choose which to exclude.
+#First for respiration, then for heartrate
+ggplot(read_csv(Filescheck[b]), aes(time, Resp1)) + 
+  geom_line() +
+  geom_line(aes(time, Resp2), color="red")
+
+Filescheck[b]
+
+#Excluded files (respiration):
+PrepData/PrepStudy1_G1_T1_Synchronous.csv
+PrepData/PrepStudy1_G1_T2_TurnTaking.csv
+PrepData/PrepStudy1_G2_T1_TurnTaking.csv
+PrepData/PrepStudy1_G2_T2_Synchronous.csv
+
+#Also all SelfPaced experiments were excluded
+
+#Excluded files (heartrate):
+   #None. But some seems different.
 ```
 
 
 
 ```{r}
+######CREATE SHUFFLED PAIRS
+Files = list.files("Included/", ".csv")
+Files_t = sample(Files, 3)
 
-######## DETERMINING THE OPTIMAL PARAMETERS
-#Get a list of all the files
-Files = list.files("CleanData/", ".csv")
-#Get a smaller list for experimentation
-Files_t = sample(Files, 6)
+#loop
+for (i in Files) {
+  #Put the path together with the filename
+  dest = paste("Included/", i, sep="")
+  #Read it
+  d_t <- read.csv(dest, header = T)
+  
+  #Randomize the order of datapoints
+  d_t$HR1x = sample(d_t$HR1, length(d_t$HR1))
+  d_t$HR1 = d_t$HR1x
+  d_t$HR2x = sample(d_t$HR2, length(d_t$HR2))
+  d_t$HR2 = d_t$HR2x
+  d_t$Resp1x = sample(d_t$Resp1, length(d_t$Resp1))
+  d_t$Resp1 = d_t$Resp1x
+  d_t$Resp2x = sample(d_t$Resp2, length(d_t$Resp2))
+  d_t$Resp2 = d_t$Resp2x
+  
+  #create new files
+  NewFilename = paste("ShuffleData/Shuff", i, sep="")
+  write.csv(d_t, file = NewFilename )
+}
+
+```
+
+```{r}
+##### SURROGATE PAIRS ######
+
+#Done with (A modified version of) Celine's code
+
+```
+
+```{r}
+
+########## RQA ANALYSIS ########
 
 
+######## DETERMINING THE OPTIMAL PARAMETERS - OF REAL PAIRS
 #Make lists for values
-Delay = NULL
-Embed = NULL
-Radius = NULL
+HR_Delay = NULL
+HR_Embed = NULL
+HR_Radius = NULL
+Resp_Delay = NULL
+Resp_Embed = NULL
+Resp_Radius = NULL
 #Iteration count
 n = 1
 
@@ -191,48 +257,83 @@ par = list(lgM =  50, steps = seq(1, 6, 1),  radiusspan = 100,  radiussample = 4
 #NOTE: I use the normal, most conservative settings for parameter optimization. But I made the rec limits wider.
 
 #Optimize for each file
-for (i in Files_t){
+for (i in Files){
   
   #Put the path together with the filename
-  dest = paste("CleanData/", i, sep="")
+  dest = paste("Included/", i, sep="")
   #Read it
   d_t <- read.csv(dest, header = T)
-  
 
   #Get optimized parameters
-  ans = try(optimizeParam(d_t$HR1, d_t$HR2, par, min.rec= 2, max.rec= 8))
+  HR_ans = try(optimizeParam(d_t$HR1, d_t$HR2, par, min.rec= 2, max.rec= 8))
+  Resp_ans = try(optimizeParam(d_t$Resp1, d_t$Resp2, par, min.rec= 2, max.rec= 8))
   
-  if (length(ans) < 2){
-    Delay[n] = NA
-    Embed[n] = NA
-    Radius[n] = NA
+  #Save optimal parameters
+  if (length(HR_ans) < 2){
+    HR_Delay[n] = NA
+    HR_Embed[n] = NA
+    HR_Radius[n] = NA
   } else {
-    Delay[n] = ans$delay
-    Embed[n] = ans$emddim
-    Radius[n] = ans$radius}
+    HR_Delay[n] = HR_ans$delay
+    HR_Embed[n] = HR_ans$emddim
+    HR_Radius[n] = HR_ans$radius}
+  
+  #Save optimal parameters
+  if (length(Resp_ans) < 2){
+    Resp_Delay[n] = NA
+    Resp_Embed[n] = NA
+    Resp_Radius[n] = NA
+  } else {
+    Resp_Delay[n] = Resp_ans$delay
+    Resp_Embed[n] = Resp_ans$emddim
+    Resp_Radius[n] = Resp_ans$radius}
   
   #loop end
   print (n)
   n = n+1 
   }
 
-DELAY = median(Delay, na.rm = T)
-EMBED = median(Embed, na.rm = T)
-RADIUS = median(Radius, na.rm = T) + 1.2
+#Take median of parameters to get shared parameters. Add 1.2 to radius for Heart Rate, as Riccardo proposed.
+HR_DELAY = 30
+#HR_Delay =  [ NA NA NA NA NA NA NA NA NA NA NA NA NA NA NA NA 38 22 49 NA NA  0]
+# = median(HR_Delay, na.rm = T)
+HR_EMBED = 11
+#HR_Embed = [NA NA NA NA NA NA NA NA NA NA NA NA NA NA NA NA 11 11 10 NA NA 17]
+# = median(HR_Embed, na.rm = T)
+HR_RADIUS = 3.02268246964669
+#HR_Radius = [NA NA NA NA NA NA NA NA NA NA NA NA NA NA NA NA 2.1011837 1.6523313 1.9930337 NA NA 0.3679445]
+# = median(HR_Radius, na.rm = T) + 1.2
+
+Resp_DELAY = 30
+#Resp_Delay = [9 NA NA 24 NA  0  9 NA 49  7 33 41 48 25 NA NA 43 NA 46 NA NA 30]
+# = median(Resp_Delay, na.rm = T)
+Resp_EMBED = 2
+#Resp_Embed = [2 NA NA  2 NA  2 15 NA  2  2  2  3  2  2 NA NA  3 NA  3 NA NA  2]
+# = median(Resp_Embed, na.rm = T)
+Resp_RADIUS = 0.3862818138
+#Resp_Radius = [0.3863281 NA NA 0.3679501 NA 0.1951098 2.6579612 NA 0.3769716 0.3786336 0.3761228 0.6807417 0.3869917 0.3466000 NA  NA 0.7486502  NA 0.7046608  NA  NA 0.3862818]
+# = median(Resp_Radius, na.rm = T)
+
+
+```
 
 
 
 
-
-
+```{r}
 
 # LOOP ABOVE THROUGH REAL PAIRS
+FilesShuf = list.files("ShuffleData/", ".csv")
+FilesSur = list.files("SurrogateData/", ".csv")
+
+
 
 #Create lists for results
-Study = NULL
-Group = NULL
-Trial = NULL
-Condition = NULL
+Study_l = NULL
+Group_l = NULL
+Trial_l = NULL
+Condition_l = NULL
+
 #CQRA
 HR_RR = NULL
 HR_DET = NULL
@@ -242,159 +343,131 @@ HR_L = NULL
 HR_ENTR = NULL
 HR_LAM = NULL
 HR_TT = NULL
+Resp_RR = NULL
+Resp_DET = NULL
+Resp_NRLINE = NULL
+Resp_maxL = NULL
+Resp_L = NULL
+Resp_ENTR = NULL
+Resp_LAM = NULL
+Resp_TT = NULL
 #iteration counter
 n = 1
 
 
 
-for (i in Files_t){
+for (i in FilesSur){
   ###Read file
   #Put the path together with the filename
-  dest = paste("CleanData/", i, sep="")
+  dest = paste("SurrogateData/", i, sep="")
   #Read it
   d_t <- read.csv(dest, header = T)
   
-  #Extract from filename
-  Study [n] = str_extract(i, "Study+\\d+") %>%   
+  #Extract demographics from filename
+  Study_l [n] = str_extract(i, "Study+\\d+") %>%   
         str_extract("\\d+")
-  Group [n] = str_extract(i, "G+\\d+") %>%   
-        str_extract("\\d+")
-  Trial [n] = str_extract(i, "T+\\d+") %>%   
-        str_extract("\\d+")
-  Condition [n] = gsub(".*[_]([^.]+)[.].*", "\\1", i)
+  Group_l [n] = NA
+    #str_extract(i, "G+\\d+") %>%   
+        #str_extract("\\d+")
+  Trial_l [n] = NA
+    #str_extract(i, "T+\\d+") %>%   
+        #str_extract("\\d+")
+  Condition_l [n] = gsub(".*[_]([^.]+)[.].*", "\\1", i)
   
-  #Extract descriptive statistics
-  P_Mean[n] = mean(d_t$f0)
-  P_SD[n] = sd(d_t$f0)
-  P_Range[n] = range(d_t$f0)[2] - range(d_t$f0)[1]
-  P_Median[n] = median(d_t$f0)
-  P_IQR[n] = IQR(d_t$f0)
-  P_MeanAbDif[n] = mean(abs(d_t$f0-mean(d_t$f0)))
-  P_CovofVar[n] = sd(d_t$f0) / mean(d_t$f0)
+
+  #Do CRQA analysis - on HR
+    HR_crqa_t = try(crqa (d_t$HR1, d_t$HR2, delay=HR_DELAY, embed=HR_EMBED, radius=HR_RADIUS, normalize=0, rescale=0, mindiagline = 2, minvertline = 2)) 
   
-  #Do CRQA analysis
-    crqa_t = try(crqa (d_t, d_t, delay=DELAY, embed=EMBED, radius=RADIUS, normalize=0, rescale=0, mindiagline = 2, minvertline = 2)) 
-  
-  
-  if (is.na(Delay[n]) | length(crqa_t) < 2 ){
-    P_RR[n] = NA
-    P_DET[n] = NA
-    P_NRLINE[n] = NA
-    P_maxL[n] = NA
-    P_L[n] = NA
-    P_ENTR[n] = NA
-    P_LAM[n] = NA
-    P_TT[n] = NA
+  if (length(HR_crqa_t) < 2 ){
+    HR_RR[n] = NA
+    HR_DET[n] = NA
+    HR_NRLINE[n] = NA
+    HR_maxL[n] = NA
+    HR_L[n] = NA
+    HR_ENTR[n] = NA
+    HR_LAM[n] = NA
+    HR_TT[n] = NA
   } else {
-    P_RR[n] = crqa_t$RR
-    P_DET[n] = crqa_t$DET
-    P_NRLINE[n] = crqa_t$NRLINE
-    P_maxL[n] = crqa_t$maxL
-    P_L[n] = crqa_t$L
-    P_ENTR[n] = crqa_t$ENTR
-    P_LAM[n] = crqa_t$LAM
-    P_TT[n] = crqa_t$TT}
+    HR_RR[n] = HR_crqa_t$RR
+    HR_DET[n] = HR_crqa_t$DET
+    HR_NRLINE[n] = HR_crqa_t$NRLINE
+    HR_maxL[n] = HR_crqa_t$maxL
+    HR_L[n] = HR_crqa_t$L
+    HR_ENTR[n] = HR_crqa_t$ENTR
+    HR_LAM[n] = HR_crqa_t$LAM
+    HR_TT[n] = HR_crqa_t$TT}
+    
+      #Do CRQA analysis - on Respiration
+    Resp_crqa_t = try(crqa (d_t$Resp1, d_t$Resp2, delay=Resp_DELAY, embed=Resp_EMBED, radius=Resp_RADIUS, normalize=0, rescale=0, mindiagline = 2, minvertline = 2)) 
+  
+  if (length(Resp_crqa_t) < 2 ){
+    Resp_RR[n] = NA
+    Resp_DET[n] = NA
+    Resp_NRLINE[n] = NA
+    Resp_maxL[n] = NA
+    Resp_L[n] = NA
+    Resp_ENTR[n] = NA
+    Resp_LAM[n] = NA
+    Resp_TT[n] = NA
+  } else {
+    Resp_RR[n] = Resp_crqa_t$RR
+    Resp_DET[n] = Resp_crqa_t$DET
+    Resp_NRLINE[n] = Resp_crqa_t$NRLINE
+    Resp_maxL[n] = Resp_crqa_t$maxL
+    Resp_L[n] = Resp_crqa_t$L
+    Resp_ENTR[n] = Resp_crqa_t$ENTR
+    Resp_LAM[n] = Resp_crqa_t$LAM
+    Resp_TT[n] = Resp_crqa_t$TT}
   
   #Loop end
   print(n)
   n = n+1}
 
+#Combine the list to create dataset
+d_out_surr = data.frame(cbind (Study_l, Group_l, Trial_l, Condition_l, HR_RR, HR_DET, HR_NRLINE, HR_maxL, HR_L, HR_ENTR, HR_LAM, HR_TT, Resp_RR, Resp_DET, Resp_NRLINE, Resp_maxL, Resp_L, Resp_ENTR, Resp_LAM, Resp_TT))
 
+d_out_real$typepairs = "real"
+d_out_shuff$typepairs = "shuffled"
+d_out_surr$typepairs = "surrogate"
 
-
-
-
-# READ IN DATA
-filename = "CleanData/Study2_G5_T1_Synchronous.csv"
-d1 = read.csv (filename, header = T)
-
-# EXTRACT DATA FROM NAME
-Study = str_extract(filename, "Study+\\d+") %>%   
-      str_extract("\\d+")
-Group = str_extract(filename, "G+\\d+") %>%   
-      str_extract("\\d+")
-Trial = str_extract(filename, "T+\\d+") %>%   
-      str_extract("\\d+")
-Condition = gsub(".*[_]([^.]+)[.].*", "\\1", filename)
-  
-#DOWNSAMPLE
-p_load(groupdata2)
-d1 = d1 %>%
-  group(n= 100, method= 'greedy') %>% 
-  dplyr::summarise(
-    time= mean(time,na.rm=T),
-    HR1 = mean(HR1,na.rm=T),
-    HR2 = mean(HR2,na.rm=T),
-    Resp1 = mean(Resp1,na.rm=T),
-    Resp2 = mean(Resp2,na.rm=T))
-
-#ARTIFACTS
-removeOuts <- function(ts,threshold){
-  ts[ts > (mean(ts,na.rm=T) +
-             (threshold*sd(ts,na.rm=T))) |
-       ts < (mean(ts,na.rm=T) -
-             (threshold*sd(ts,na.rm=T)))] =
-  mean(ts,na.rm=T)
-  return(ts)}
-
-threshold=2.5
-
-d1$HR1=removeOuts(d1$HR1,threshold) 
-d1$HR2=removeOuts(d1$HR2,threshold) 
-d1$Resp1=removeOuts(d1$Resp1,threshold) 
-d1$Resp2=removeOuts(d1$Resp2,threshold) 
-
-
-#SCALE
-d1$Resp1=scale(d1$Resp1)
-d1$Resp2=scale(d1$Resp2)
-d1$HR1=scale(d1$HR1)
-d1$HR2=scale(d1$HR2)
-
-
-#GET RQA RESULTS
-#Finding the optimal parameters: run on all pairs:
-par = list(lgM =  50, steps = seq(1, 6, 1),  radiusspan = 100,  radiussample = 40, normalize = 0,  rescale = 0,  mindiagline = 2,  minvertline = 2,  tw = 0,  whiteline = FALSE,  recpt = FALSE,  fnnpercent = 10,  typeami = "mindip")
-ans = optimizeParam(d1$HR1, d1$HR2, par, min.rec = 2, max.rec = 8) 
-
-Results=crqa (d1$HR1, d1$HR2, delay=10, embed=8, radius=4,normalize=0,rescale=0,mindiagline = 2,minvertline = 2)
-
-
-#Represent the plot:
-RP=Results$RP
-RP = matrix(as.numeric(RP), nrow = ncol(RP))
-cols = c("white","blue4") 
-image(RP, xlab = "", ylab = "", col = cols) 
-#Explore the lags of coordination: 
-Profile=drpdfromts(d1$HR1, d1$HR2, datatype = 'continuous',ws=50,radius=4) 
-timecourse = round( seq(-5000,5000,100)/1000, digit = 1) 
-maxlag = Profile$maxlag/1000 
-profile = Profile$profile*100 
-Prof=data.frame(profile) 
-ggplot(Prof, aes(timecourse,profile))+geom_line()+ geom_vline(xintercept = timecourse[maxlag], colour='red')
-
-
-
-#CREATE SHUFFLED PAIRS - LOOP CRQA ON THEM
-
-
-
-
-#CREATE SURROGATE PAIRS - LOOP CRQA
+write.csv(d_out_real, file="Results_Real.csv")
+write.csv(d_out_shuff, file="Results_Shuffled.csv")
+write.csv(d_out_surr, file="Results_Surrogate.csv")
 
 ```
-
 
 2) Do you observe interpersonal coordination in heart rate and respiration? Describe your control baseline, the method used to quantify coordination, and the statistical models used to infer whether coordination was higher than in the baseline. Report the results of the models.
 
 
 ```{r}
+#Create the final, full dataset
+d_real = read.csv("Results_Real.csv", header = T)
+d_shuff = read.csv("Results_Shuffled.csv", header = T)
+d_surr = read.csv("Results_Surrogate.csv", header = T)
 
+d = rbind(rbind(d_real, d_shuff),d_surr)
 
+#PMake a list of models to test
+ml = c('HR_RR ~ typepairs + (1|Study_l)',
+           'HR_DET ~ typepairs + (1|Study_l)',
+           'HR_NRLINE ~ typepairs + (1|Study_l)',
+           'HR_maxL ~ typepairs + (1|Study_l)',
+           'HR_L ~ typepairs + (1|Study_l)',
+           'HR_ENTR ~ typepairs + (1|Study_l)',
+           'HR_LAM ~ typepairs + (1|Study_l)',
+           'HR_TT ~ typepairs + (1|Study_l)', 
+           'Resp_RR ~ typepairs + (1|Study_l)',
+           'Resp_DET ~ typepairs + (1|Study_l)',
+           'Resp_NRLINE ~ typepairs + (1|Study_l)',
+           'Resp_maxL ~ typepairs + (1|Study_l)',
+           'Resp_L ~ typepairs + (1|Study_l)', 
+           'Resp_ENTR ~ typepairs + (1|Study_l)',
+           'Resp_LAM ~ typepairs + (1|Study_l)', 
+           'Resp_TT ~ typepairs + (1|Study_l)')
 
-
-
-
+for (i in ml){
+  m0 = lmer(i, d)
+  print(summary(m0))}
 ```
 
 
@@ -404,11 +477,27 @@ ggplot(Prof, aes(timecourse,profile))+geom_line()+ geom_vline(xintercept = timec
 ```{r}
 #####CONDITIONS
 
+#PMake a list of models to test
+ml2 = c('HR_RR ~ typepairs*Condition_l + (1|Study_l)',
+           'HR_DET ~ typepairs*Condition_l + (1|Study_l)',
+           'HR_NRLINE ~ typepairs*Condition_l + (1|Study_l)',
+           'HR_maxL ~ typepairs*Condition_l + (1|Study_l)',
+           'HR_L ~ typepairs*Condition_l + (1|Study_l)',
+           'HR_ENTR ~ typepairs*Condition_l + (1|Study_l)',
+           'HR_LAM ~ typepairs*Condition_l + (1|Study_l)',
+           'HR_TT ~ typepairs*Condition_l + (1|Study_l)', 
+           'Resp_RR ~ typepairs*Condition_l + (1|Study_l)',
+           'Resp_DET ~ typepairs*Condition_l + (1|Study_l)',
+           'Resp_NRLINE ~ typepairs*Condition_l + (1|Study_l)',
+           'Resp_maxL ~ typepairs*Condition_l + (1|Study_l)',
+           'Resp_L ~ typepairs*Condition_l + (1|Study_l)', 
+           'Resp_ENTR ~ typepairs*Condition_l + (1|Study_l)',
+           'Resp_LAM ~ typepairs*Condition_l + (1|Study_l)', 
+           'Resp_TT ~ typepairs*Condition_l + (1|Study_l)')
 
-#If do interaction, will take away the stuff from doing the same activity
-HR_RR ~ Condition*Type
-
-
+for (i in ml2){
+  m0 = lmer(i, d)
+  print(summary(m0))}
 ```
 
 4) Is respiration coordination a likely driver of heart rate coordination? Describe how you would test for it. Bonus points if you actually run the tests and report methods and results.
@@ -416,6 +505,7 @@ HR_RR ~ Condition*Type
 
 ```{r}
 
+#I would predict Heart Rate RR from Respiration RR and repeat for all the CRQA parameters
 
 
 ```
